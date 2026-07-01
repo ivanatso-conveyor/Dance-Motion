@@ -316,17 +316,31 @@ function onBeat() {
 }
 
 // -------------------- Load model + camera --------------------
-async function loadModel() {
-  statusEl.textContent = "Loading pose model…";
-  const vision = await FilesetResolver.forVisionTasks(
-    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
-  poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
-    baseOptions: {
-      modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
-      delegate: "GPU",
-    },
+const WASM_URL  = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
+const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
+let visionResolver = null, usingDelegate = "GPU", cpuFallbackDone = false;
+
+// Build the pose detector on either the GPU (fast) or CPU (slower but works everywhere) backend.
+async function makeLandmarker(delegate) {
+  return await PoseLandmarker.createFromOptions(visionResolver, {
+    baseOptions: { modelAssetPath: MODEL_URL, delegate },
     runningMode: "VIDEO", numPoses: 1,
   });
+}
+async function loadModel() {
+  statusEl.textContent = "Loading pose model…";
+  visionResolver = await FilesetResolver.forVisionTasks(WASM_URL);
+  try {
+    poseLandmarker = await makeLandmarker("GPU");   // fast path
+    usingDelegate = "GPU";
+  } catch (e) {
+    // Some machines/browsers can't create a WebGL/GPU context — fall back to CPU.
+    console.warn("GPU backend unavailable, falling back to CPU:", e);
+    statusEl.textContent = "GPU unavailable — using CPU (a little slower)…";
+    poseLandmarker = await makeLandmarker("CPU");
+    usingDelegate = "CPU";
+    cpuFallbackDone = true;
+  }
   drawUtils = new DrawingUtils(ctx);
 }
 async function startCamera() {
@@ -337,12 +351,27 @@ async function startCamera() {
 }
 
 // -------------------- Detection loop (runs every frame) --------------------
-function detectLoop() {
+async function detectLoop() {
   if (!cameraOn) return;
   if (video.currentTime !== lastVideoTime) {
     lastVideoTime = video.currentTime;
     const now = performance.now();
-    const poseRes = poseLandmarker.detectForVideo(video, now);
+    let poseRes;
+    try {
+      poseRes = poseLandmarker.detectForVideo(video, now);
+    } catch (err) {
+      // If the GPU backend fails on the first live frame, rebuild once on CPU and keep going.
+      if (usingDelegate === "GPU" && !cpuFallbackDone) {
+        cpuFallbackDone = true; usingDelegate = "CPU";
+        statusEl.textContent = "Switching to CPU rendering…";
+        try { poseLandmarker.close(); } catch (_) {}
+        poseLandmarker = await makeLandmarker("CPU");
+      } else {
+        console.error(err);
+      }
+      requestAnimationFrame(detectLoop);
+      return;
+    }
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     if (poseRes.landmarks && poseRes.landmarks.length > 0) {
