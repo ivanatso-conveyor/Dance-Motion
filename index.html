@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Dance Motion</title>
+<style>
+  :root {
+    --accent: #00e5ff;
+    --hot: #ff2d78;
+    --ok: #3dff9e;
+    --gold: #ffd23d;
+    --bg: #0b0b16;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%;
+    background: var(--bg); color: #fff;
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    overflow: hidden;
+  }
+
+  /* Full-screen stage holding the mirrored webcam + skeleton */
+  #stage { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: #000; }
+  #webcam, #overlay {
+    position: absolute; max-width: 100%; max-height: 100%;
+    transform: scaleX(-1);   /* mirror so it feels like a mirror */
+  }
+  #webcam { object-fit: contain; }
+
+  /* =================== FULL-WIDTH TOP HEADER (score/combo) =================== */
+  #header {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 30;
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 20px;
+    background: linear-gradient(180deg, rgba(8,8,18,0.92), rgba(8,8,18,0.72));
+    border-bottom: 1px solid rgba(255,255,255,0.12);
+    backdrop-filter: blur(8px);
+  }
+  #brand { font-size: 18px; font-weight: 800; white-space: nowrap; margin-right: 8px; }
+  #stats { display: flex; flex: 1; justify-content: space-around; gap: 12px; }
+  .stat { text-align: center; line-height: 1.1; }
+  .stat .label { font-size: 10px; opacity: 0.6; text-transform: uppercase; letter-spacing: 1px; }
+  .stat .val { font-size: 26px; font-weight: 800; }
+  #score .val   { color: var(--gold); font-size: 34px; }
+  #combo .val   { color: var(--hot); }
+  #time  .val   { color: var(--accent); }
+  #beatDot { width: 14px; height: 14px; border-radius: 50%; background: var(--ok); opacity: 0.35; transition: transform 0.08s, opacity 0.08s; }
+  #beatDot.pulse { transform: scale(1.8); opacity: 1; }
+
+  /* =================== MOVE CALLER (below header) =================== */
+  #caller { position: fixed; top: 86px; left: 0; right: 0; text-align: center; z-index: 20; pointer-events: none; }
+  #moveEmoji { font-size: 56px; line-height: 1; }
+  #moveText { font-size: 34px; font-weight: 800; letter-spacing: 0.5px; margin-top: 4px; text-shadow: 0 2px 12px rgba(0,0,0,0.7); }
+  #timerBar { height: 8px; margin: 12px auto 0; width: min(560px, 80vw); background: rgba(255,255,255,0.15); border-radius: 999px; overflow: hidden; }
+  #timerFill { height: 100%; width: 100%; background: var(--accent); }
+  #feedback { margin-top: 8px; font-size: 26px; font-weight: 800; height: 30px; transition: opacity 0.2s; opacity: 0; }
+
+  /* Big centered countdown number */
+  #countdown {
+    position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+    z-index: 35; font-size: 180px; font-weight: 900; color: #fff;
+    text-shadow: 0 8px 40px rgba(0,229,255,0.6); pointer-events: none;
+  }
+
+  /* =================== RESULTS OVERLAY =================== */
+  #results {
+    position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+    z-index: 40; background: rgba(6,6,14,0.82); backdrop-filter: blur(6px);
+  }
+  #results .card {
+    background: #12121f; border: 1px solid rgba(255,255,255,0.14); border-radius: 20px;
+    padding: 30px 40px; width: min(440px, 90vw); text-align: center;
+  }
+  #results .big { font-size: 30px; font-weight: 900; }
+  #rank { font-size: 20px; font-weight: 700; color: var(--gold); margin: 6px 0 18px; }
+  #finalScore { font-size: 58px; font-weight: 900; color: var(--gold); line-height: 1; }
+  #finalScore + .label { font-size: 12px; opacity: 0.6; text-transform: uppercase; letter-spacing: 1px; }
+  .rgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 20px 0; }
+  .rgrid .box { background: rgba(255,255,255,0.06); border-radius: 12px; padding: 10px; }
+  .rgrid .box .n { font-size: 24px; font-weight: 800; }
+  .rgrid .box .l { font-size: 11px; opacity: 0.6; text-transform: uppercase; letter-spacing: 1px; }
+  #againBtn { padding: 12px 22px; font-size: 16px; font-weight: 800; border: none; border-radius: 999px; background: var(--accent); color: #012; cursor: pointer; }
+
+  /* =================== CONTROLS =================== */
+  #controls {
+    position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 10px; align-items: center; z-index: 30;
+    background: rgba(10,10,22,0.8); padding: 10px 14px; border-radius: 999px;
+    border: 1px solid rgba(255,255,255,0.12);
+  }
+  #controls button { padding: 9px 16px; font-size: 14px; font-weight: 700; border: none; border-radius: 999px; background: var(--accent); color: #012; cursor: pointer; }
+  #controls button.secondary { background: rgba(255,255,255,0.15); color: #fff; }
+  #controls button:disabled { opacity: 0.5; cursor: default; }
+  #status { font-size: 13px; opacity: 0.85; max-width: 40vw; }
+</style>
+</head>
+<body>
+  <div id="stage">
+    <video id="webcam" autoplay playsinline muted></video>
+    <canvas id="overlay"></canvas>
+  </div>
+
+  <!-- Full-width header with the score & combo -->
+  <div id="header">
+    <div id="brand">🕺 Dance Motion</div>
+    <div id="stats">
+      <div class="stat" id="time"><div class="label">Time</div><div class="val" id="timeVal">60s</div></div>
+      <div class="stat" id="score"><div class="label">Score</div><div class="val" id="scoreVal">0</div></div>
+      <div class="stat" id="combo"><div class="label">Combo</div><div class="val" id="comboVal">x1</div></div>
+      <div class="stat"><div class="label">Hits</div><div class="val" id="hitsVal">0</div></div>
+      <div class="stat"><div class="label">Misses</div><div class="val" id="missesVal">0</div></div>
+      <div class="stat"><div class="label">Accuracy</div><div class="val" id="accVal">—</div></div>
+    </div>
+    <div id="beatDot"></div>
+  </div>
+
+  <div id="caller">
+    <div id="moveEmoji">🎵</div>
+    <div id="moveText">Get ready…</div>
+    <div id="timerBar"><div id="timerFill"></div></div>
+    <div id="feedback"></div>
+  </div>
+
+  <div id="countdown"></div>
+
+  <!-- Results shown after the 60-second round -->
+  <div id="results">
+    <div class="card">
+      <div class="big">🎉 Round complete!</div>
+      <div id="rank"></div>
+      <div id="finalScore">0</div>
+      <div class="label">Final score</div>
+      <div class="rgrid">
+        <div class="box"><div class="n" id="rHits">0</div><div class="l">Hits</div></div>
+        <div class="box"><div class="n" id="rMisses">0</div><div class="l">Misses</div></div>
+        <div class="box"><div class="n" id="rAcc">0%</div><div class="l">Accuracy</div></div>
+        <div class="box"><div class="n" id="rCombo">x0</div><div class="l">Best combo</div></div>
+      </div>
+      <button id="againBtn">▶ Play again</button>
+    </div>
+  </div>
+
+  <div id="controls">
+    <button id="startBtn">Start camera</button>
+    <button id="playBtn" class="secondary" disabled>▶ Play</button>
+    <span id="status">Click “Start camera” to begin.</span>
+  </div>
+
+<script type="module">
+// ===========================================================================
+// SEATED DANCE GAME — MediaPipe Pose Landmarker (upper body, 60-second round)
+// ===========================================================================
+import {
+  PoseLandmarker, FilesetResolver, DrawingUtils
+} from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+
+// ---- Page elements ----
+const video   = document.getElementById("webcam");
+const canvas  = document.getElementById("overlay");
+const ctx     = canvas.getContext("2d");
+const statusEl= document.getElementById("status");
+const startBtn= document.getElementById("startBtn");
+const playBtn = document.getElementById("playBtn");
+const beatDot = document.getElementById("beatDot");
+
+const moveEmojiEl = document.getElementById("moveEmoji");
+const moveTextEl  = document.getElementById("moveText");
+const timerFill   = document.getElementById("timerFill");
+const feedbackEl  = document.getElementById("feedback");
+const countdownEl = document.getElementById("countdown");
+const resultsEl   = document.getElementById("results");
+const againBtn    = document.getElementById("againBtn");
+
+const scoreVal = document.getElementById("scoreVal");
+const comboVal = document.getElementById("comboVal");
+const hitsVal  = document.getElementById("hitsVal");
+const missesVal= document.getElementById("missesVal");
+const accVal   = document.getElementById("accVal");
+const timeVal  = document.getElementById("timeVal");
+
+// =========================== TUNABLE SETTINGS ==============================
+const BPM            = 127;          // matches "Y.M.C.A." by Village People (~127 BPM)
+const BEATS_PER_MOVE = 4;            // a new move is called every 4 beats
+const ROUND_SECONDS  = 60;           // length of one round
+const RAISE_MARGIN   = 0.04;         // how far a wrist must be above the shoulder to count as "up"
+const CLAP_DIST      = 0.13;         // how close the two wrists must be to count as a clap
+const ARMS_OUT_X     = 0.17;         // how far out to the side a wrist must be for "arms out"
+const COVER_DIST     = 0.22;         // how close both wrists must be to your nose to "cover your face"
+const HOLD_FRAMES    = 2;            // frames a pose must be held to score a hit (lower = more responsive)
+const WAVE_WINDOW_MS = 1000;         // time window used to detect a wave
+const WAVE_REVERSALS = 2;            // side-to-side direction changes needed for a wave (lower = easier)
+const WAVE_UP_MARGIN = 0.12;         // waves count when the hand is near shoulder height or above
+// ===========================================================================
+
+const beatMs   = 60000 / BPM;
+const moveWindowMs = beatMs * BEATS_PER_MOVE;
+
+// MediaPipe pose landmark indices (from the PERSON's point of view)
+const NOSE=0, L_SH=11, R_SH=12, L_WR=15, R_WR=16;
+
+let poseLandmarker = null, drawUtils = null;
+let cameraOn = false, playing = false, countingDown = false;
+let lastVideoTime = -1;
+
+// -------------------- Wave detection buffers --------------------
+const waveL = [], waveR = [];
+function pushWave(buf, x, t) {
+  buf.push({ x, t });
+  while (buf.length && t - buf[0].t > WAVE_WINDOW_MS) buf.shift();
+}
+function countReversals(buf) {
+  let reversals = 0, lastSign = 0;
+  for (let i = 1; i < buf.length; i++) {
+    const d = buf[i].x - buf[i-1].x;
+    if (Math.abs(d) < 0.02) continue;
+    const sign = d > 0 ? 1 : -1;
+    if (lastSign && sign !== lastSign) reversals++;
+    lastSign = sign;
+  }
+  return reversals;
+}
+
+// -------------------- Helper functions --------------------
+function raised(lm, wrist, shoulder) { return lm[wrist].y < lm[shoulder].y - RAISE_MARGIN; }
+function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+function isWaving(buf) { return countReversals(buf) >= WAVE_REVERSALS; }
+// A hand counts as "up-ish" for waving when it's around shoulder height or higher
+// (so you can wave at face level, not only well above your shoulder).
+function handUpish(lm, wrist, shoulder) { return lm[wrist].y < lm[shoulder].y + WAVE_UP_MARGIN; }
+
+// -------------------- The moves the game can call --------------------
+const MOVES = [
+  { id:"L_UP",   emoji:"✋", text:"RAISE LEFT HAND",   detect:(lm)=> raised(lm, L_WR, L_SH) },
+  { id:"R_UP",   emoji:"🤚", text:"RAISE RIGHT HAND",  detect:(lm)=> raised(lm, R_WR, R_SH) },
+  { id:"BOTH",   emoji:"🙌", text:"BOTH HANDS UP!",    detect:(lm)=> handUpish(lm, L_WR, L_SH) && handUpish(lm, R_WR, R_SH) },
+  { id:"WAVE_L", emoji:"👋", text:"WAVE LEFT HAND",    instant:true, detect:(lm)=> handUpish(lm, L_WR, L_SH) && isWaving(waveL) },
+  { id:"WAVE_R", emoji:"👋", text:"WAVE RIGHT HAND",   instant:true, detect:(lm)=> handUpish(lm, R_WR, R_SH) && isWaving(waveR) },
+  { id:"CLAP",   emoji:"👏", text:"CLAP!",             detect:(lm)=> dist(lm[L_WR], lm[R_WR]) < CLAP_DIST },
+  { id:"ARMS",   emoji:"🆃", text:"T-POSE (ARMS OUT)", detect:(lm)=>
+      Math.abs(lm[L_WR].x - lm[L_SH].x) > ARMS_OUT_X && Math.abs(lm[L_WR].y - lm[L_SH].y) < 0.18 &&
+      Math.abs(lm[R_WR].x - lm[R_SH].x) > ARMS_OUT_X && Math.abs(lm[R_WR].y - lm[R_SH].y) < 0.18 },
+  { id:"COVER",  emoji:"🙈", text:"COVER YOUR FACE!",  detect:(lm)=>
+      dist(lm[L_WR], lm[NOSE]) < COVER_DIST && dist(lm[R_WR], lm[NOSE]) < COVER_DIST },
+];
+
+// -------------------- Game state --------------------
+let score=0, combo=0, maxCombo=0, hits=0, misses=0;
+let currentMove=null, moveStart=0, matchedFrames=0, moveHit=false, prevMoveId=null;
+let roundStart=0;
+
+function pickMove() {
+  let m;
+  do { m = MOVES[Math.floor(Math.random()*MOVES.length)]; } while (m.id === prevMoveId && MOVES.length>1);
+  prevMoveId = m.id;
+  return m;
+}
+function startMove() {
+  currentMove = pickMove();
+  moveStart = performance.now();
+  matchedFrames = 0; moveHit = false;
+  moveEmojiEl.textContent = currentMove.emoji;
+  moveTextEl.textContent  = currentMove.text;
+}
+function flash(txt, color) {
+  feedbackEl.textContent = txt;
+  feedbackEl.style.color = color;
+  feedbackEl.style.opacity = 1;
+  setTimeout(()=>{ feedbackEl.style.opacity = 0; }, 500);
+}
+function registerHit() {
+  if (moveHit) return;
+  moveHit = true;
+  const remaining = 1 - (performance.now() - moveStart) / moveWindowMs;
+  const speedBonus = Math.max(0, Math.round(remaining * 100));
+  combo++; if (combo > maxCombo) maxCombo = combo;
+  const gained = (100 + speedBonus) * combo;
+  score += gained; hits++;
+  flash(remaining > 0.5 ? `PERFECT!  +${gained}` : `GOOD  +${gained}`, "var(--ok)");
+  updateStats();
+}
+function endMoveIfNeeded(now) {
+  if (!currentMove) return;
+  if (now - moveStart >= moveWindowMs) {
+    if (!moveHit) { misses++; combo = 0; flash("MISS", "var(--hot)"); updateStats(); }
+    startMove();
+  }
+}
+function updateStats() {
+  scoreVal.textContent = score.toLocaleString();
+  comboVal.textContent = "x" + Math.max(1, combo);
+  hitsVal.textContent  = hits;
+  missesVal.textContent= misses;
+  const total = hits + misses;
+  accVal.textContent = total ? Math.round(100*hits/total) + "%" : "—";
+}
+
+// -------------------- Beat / metronome --------------------
+let audioCtx = null, beatTimer = null, beatIndex = 0;
+function tick(accent) {
+  if (!audioCtx) return;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.frequency.value = accent ? 1400 : 900;
+  gain.gain.setValueAtTime(0.0001, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.25, audioCtx.currentTime + 0.005);
+  gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.09);
+  osc.connect(gain).connect(audioCtx.destination);
+  osc.start(); osc.stop(audioCtx.currentTime + 0.1);
+}
+function onBeat() {
+  tick(beatIndex % BEATS_PER_MOVE === 0);
+  beatDot.classList.add("pulse");
+  setTimeout(()=> beatDot.classList.remove("pulse"), 90);
+  beatIndex++;
+}
+
+// -------------------- Load model + camera --------------------
+async function loadModel() {
+  statusEl.textContent = "Loading pose model…";
+  const vision = await FilesetResolver.forVisionTasks(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+  poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
+    baseOptions: {
+      modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+      delegate: "GPU",
+    },
+    runningMode: "VIDEO", numPoses: 1,
+  });
+  drawUtils = new DrawingUtils(ctx);
+}
+async function startCamera() {
+  const stream = await navigator.mediaDevices.getUserMedia({ video:{ width:1280, height:720 }, audio:false });
+  video.srcObject = stream;
+  await video.play();
+  canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+}
+
+// -------------------- Detection loop (runs every frame) --------------------
+function detectLoop() {
+  if (!cameraOn) return;
+  if (video.currentTime !== lastVideoTime) {
+    lastVideoTime = video.currentTime;
+    const now = performance.now();
+    const poseRes = poseLandmarker.detectForVideo(video, now);
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (poseRes.landmarks && poseRes.landmarks.length > 0) {
+      const lm = poseRes.landmarks[0];
+      pushWave(waveL, lm[L_WR].x, now);
+      pushWave(waveR, lm[R_WR].x, now);
+      drawUtils.drawConnectors(lm, PoseLandmarker.POSE_CONNECTIONS, { color:"#00e5ff", lineWidth:4 });
+      drawUtils.drawLandmarks(lm, { color:"#ff2d78", radius:5 });
+
+      if (playing && currentMove && !moveHit) {
+        const needed = currentMove.instant ? 1 : HOLD_FRAMES;  // waves score as soon as detected
+        if (currentMove.detect(lm)) { matchedFrames++; if (matchedFrames >= needed) registerHit(); }
+        else matchedFrames = 0;
+      }
+    } else if (playing) {
+      statusEl.textContent = "Sit so your head, shoulders and hands are visible.";
+    }
+
+    // ---- Round clock + per-move timer ----
+    if (playing) {
+      const elapsed = now - roundStart;
+      const left = Math.max(0, ROUND_SECONDS - Math.floor(elapsed / 1000));
+      timeVal.textContent = left + "s";
+      if (elapsed >= ROUND_SECONDS * 1000) { endRound(); }
+      else if (currentMove) {
+        const frac = Math.max(0, 1 - (now - moveStart) / moveWindowMs);
+        timerFill.style.width = (frac * 100) + "%";
+        timerFill.style.background = moveHit ? "var(--ok)" : (frac < 0.3 ? "var(--hot)" : "var(--accent)");
+        endMoveIfNeeded(now);
+      }
+    }
+  }
+  requestAnimationFrame(detectLoop);
+}
+
+// -------------------- Round flow: countdown -> play -> results --------------------
+function startCountdown() {
+  if (!cameraOn || playing || countingDown) return;
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  audioCtx.resume();
+  resultsEl.style.display = "none";
+  countingDown = true;
+  playBtn.disabled = true;
+  statusEl.textContent = "Get ready…";
+  countdownEl.style.display = "flex";
+
+  let n = 3;
+  const step = () => {
+    if (n > 0) {
+      countdownEl.textContent = n;
+      tick(true);
+      n--;
+      setTimeout(step, 800);
+    } else {
+      countdownEl.textContent = "GO!";
+      tick(true);
+      setTimeout(() => { countdownEl.style.display = "none"; countingDown = false; beginRound(); }, 600);
+    }
+  };
+  step();
+}
+
+function beginRound() {
+  score=0; combo=0; maxCombo=0; hits=0; misses=0; updateStats();
+  timeVal.textContent = ROUND_SECONDS + "s";
+  beatIndex = 0;
+  roundStart = performance.now();
+  playing = true;
+  startMove();
+  beatTimer = setInterval(onBeat, beatMs);
+  onBeat();
+  playBtn.disabled = false;
+  playBtn.textContent = "⏸ Stop";
+  statusEl.textContent = "Dance! 60 seconds — follow the moves at the top.";
+}
+
+function stopBeat() { clearInterval(beatTimer); beatTimer = null; }
+
+function endRound() {
+  playing = false;
+  stopBeat();
+  currentMove = null;
+  timerFill.style.width = "100%";
+  moveEmojiEl.textContent = "🎉";
+  moveTextEl.textContent = "Round complete!";
+  playBtn.textContent = "▶ Play";
+  timeVal.textContent = "0s";
+  statusEl.textContent = "Round over — press Play again to go once more.";
+  showResults();
+}
+
+function showResults() {
+  const total = hits + misses;
+  const acc = total ? Math.round(100 * hits / total) : 0;
+  let rank = "Keep practicing 💪";
+  if (acc >= 90) rank = "Dance Machine 🕺💯";
+  else if (acc >= 70) rank = "Groovy 😎";
+  else if (acc >= 50) rank = "Getting warmed up 🔥";
+
+  document.getElementById("finalScore").textContent = score.toLocaleString();
+  document.getElementById("rHits").textContent = hits;
+  document.getElementById("rMisses").textContent = misses;
+  document.getElementById("rAcc").textContent = acc + "%";
+  document.getElementById("rCombo").textContent = "x" + maxCombo;
+  document.getElementById("rank").textContent = rank;
+  resultsEl.style.display = "flex";
+}
+
+// -------------------- Buttons --------------------
+startBtn.addEventListener("click", async () => {
+  startBtn.disabled = true;
+  try {
+    statusEl.textContent = "Loading…";
+    if (!poseLandmarker) await loadModel();
+    await startCamera();
+    cameraOn = true;
+    detectLoop();
+    playBtn.disabled = false;
+    statusEl.textContent = "Camera on. Press ▶ Play to start a 60-second round.";
+  } catch (err) {
+    console.error(err);
+    statusEl.textContent = "Error: " + err.message + " (Allow camera access; run on http://localhost.)";
+    startBtn.disabled = false;
+  }
+});
+
+playBtn.addEventListener("click", () => {
+  if (!cameraOn) return;
+  if (playing) {
+    // Stop the round early
+    playing = false;
+    stopBeat();
+    currentMove = null;
+    timerFill.style.width = "100%";
+    moveEmojiEl.textContent = "🎵";
+    moveTextEl.textContent = "Paused — press ▶ Play";
+    playBtn.textContent = "▶ Play";
+    statusEl.textContent = "Stopped. Press ▶ Play to start a new round.";
+  } else {
+    startCountdown();
+  }
+});
+
+againBtn.addEventListener("click", () => { resultsEl.style.display = "none"; startCountdown(); });
+</script>
+</body>
+</html>
